@@ -6,6 +6,7 @@ Created on 28 May 2016
 import os
 from flask import Flask
 from flask import request
+from flask import jsonify
 
 import urllib
 import numpy as np
@@ -82,6 +83,10 @@ def evaluate_image(dir):
     #print "Probabilities", probabilities.eval(feed_dict={x: data}, session=sess)
     return prediction.eval(feed_dict={x: data}, session=sess)[0].astype(str)
  
+@app.after_request
+def apply_allow_origin(response):
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response
 
 @app.route("/env")
 def list_env():
@@ -109,16 +114,14 @@ def hello():
         result = "invalid"
         result = evaluate_image(dir)
         
-        if (usejson != None):
-            message = '{"evaluation":{ "status":'
-            if (result != "invalid"):
-                message = message + '"valid",'
-            else:
-                message = message + '"invalid",'
+        if (usejson != None):           
+            jsonMsg = {'status':'invalid', 'url': '', 'result': ''}
             
-            message = message + '"url":"'+ imgurl + '",'
-            message = message + '"result":"' + result + '" }}'
-            message = message + "\r\n"
+            if (result != "invalid"):
+                jsonMsg['status']='valid'
+            jsonMsg['url']=imgurl
+            jsonMsg['result']=result;
+            return jsonify(jsonMsg);
         else:
             message = '''
             <html lang="en">
