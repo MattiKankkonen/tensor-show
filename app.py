@@ -11,12 +11,14 @@ from flask import jsonify
 import urllib
 import numpy as np
 import re
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from tensorflow.examples.tutorials.mnist import input_data
 import tensorflow as tf
 
-app = Flask(__name__)
+debug = 0
+
+app = Flask(__name__, static_url_path='/tmp/')
 
 x = tf.placeholder(tf.float32, [None, 784])
 W = tf.Variable(tf.zeros([784, 10]))
@@ -40,17 +42,121 @@ def train_tensor():
         batch_xs, batch_ys = mnist.train.next_batch(100)
         sess.run(train_step, feed_dict={x: batch_xs, y_: batch_ys})
 
-        correct_prediction = tf.equal(tf.argmax(y,1), tf.argmax(y_,1))
-        accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-        
+    correct_prediction = tf.equal(tf.argmax(y,1), tf.argmax(y_,1))
+    accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+    print (sess.run(accuracy, feed_dict={x: mnist.test.images, y_: mnist.test.labels}))
+    ###
+    if(debug):
+        row = col = 28
+        data = np.zeros((1,row*col))
+        print "Reverse verification"
+        image_index = 6
+        #print mnist.test.images[image_index]
+        print mnist.test.labels[image_index]
+        np.copyto(data, mnist.test.images[image_index])
+        #print "Prediction ", prediction.eval(feed_dict={x: data}, session=sess)
+        #print "Probabilities", probabilities.eval(feed_dict={x: data}, session=sess)
 
-def evaluate_image(dir):
-    orig = Image.open(dir + "/img.jpg")
-    sized = orig.resize([28,28])
-    im = sized.convert("L")
+        for yy in range(row):
+            row_str = []
+            for xx in range(col):
+                value = mnist.test.images[image_index,yy*col + xx]
+            
+                row_str.append(int(value*99))
+                #im.putpixel((xx,yy), value)
+            print row_str
+        
+        #im.save("/mnt/tensorshow/reference.jpg")
+    
+    
+def crop_image(data, fileName):
+    image = Image.open(fileName)
+    col, row = image.size
+    
+    frame = 30;
+    left = right = up = down = 0
+    '''' 
+    Ok, first let's find out where in the picture
+    our figure is located 
+    '''
+    for i in range(3, row):
+        for j in range(3, col):
+            value = data[0,i*col + j]
+            if (value != 0):
+                if(left == 0 or left > j):
+                    left = j
+                if(right == 0 or right < j):
+                    right = j
+                if(up == 0 or up > i):
+                    up = i
+                if(down == 0 or down < i):
+                    down = i
+    
+    ''' Not too tight crop, we want some frame around '''
+    left = left - frame
+    if(left < 0):
+        left = 0
+    right = right + frame
+    if(right > col):
+        right = col
+    up = up - frame
+    if(up < 0):
+        up = 0
+    down = down + frame
+    if(down > row):
+        down = row
+    
+    ''' Finally we need to ensure it's still a rectangle '''
+    x = right - left
+    y = down - up
+    if ((x) > (y)):
+        # it's wider than it's high
+        adjust = int((x - y)/2)
+        up = up - adjust
+        down = down + adjust
+    else:
+        adjust = int((y - x)/2)
+        left = left - adjust
+        right = right + adjust
+         
+    sample = image.crop([left, up, right, down])
+    ''' 
+    If we cropped outside of original image we need to 
+    fill the new areas 
+    '''
+    x1 = y1 = 0
+    x2 = col
+    y2 = row
+    draw = False
+    if(left < 0):
+        x2 = abs(left)
+        draw = True
+    if(right > col):
+        x2 = col + (right - col)
+        x1 = col
+        draw = True
+    if(up < 0):
+        y2 = abs(up)
+        draw = True
+    if(down > row):
+        y2 = row + (down - row)
+        y1 = row
+        draw = True
+    if(draw):
+        print left, up, right, down
+        print x1, y1, x2, y2
+        d = ImageDraw.Draw(sample)
+        d.rectangle([x1, y1, x2, y2], 255)
+    
+    sample.save(fileName)
+                        
+def prepare_image(fromFile, toSize, toFile):
+    orig = Image.open(fromFile)
+        
+    im = orig.convert("L")
+    im = im.resize(toSize)
     col, row = im.size
     data = np.zeros((1,row*col))
-     
     pixels = im.load()
     
     for i in range(row):
@@ -58,30 +164,49 @@ def evaluate_image(dir):
             value = pixels[j,i]
             data[0,i*col + j] = value
                 
-    
-    ''' This is too rough currently pic can't be just 1's and 0's 
-    PILLOW probably would have some fancy existing function for this '''
     for i in range(row):
+        orig_row_str = []
         row_str = []
         for j in range(col):
+            orig_row_str.append( data[0,i*col + j] )
             value = (255 - data[0,i*col + j])
-            if( value > 200 ):
+            
+            value = value / 250
+            if (value > 1):
                 value = 1
-            elif (value > 110 ):
-                value = 1
-            else: 
+            if (value < 0.50):
                 value = 0
-            row_str.append(value)
+            row_str.append(int(value*99))
             data[0,i*col + j] = value
         
+        if(debug):
+            #print orig_row_str
+            print row_str
+    
+    im.save(toFile)
+    return data
+    
+    
+def evaluate_image(dir, fileName, crop):    
+    if(crop == False):
+        data = prepare_image(dir+fileName, [28,28], dir + "latest_sample.jpg")    
+    else:
+        data = prepare_image(dir+fileName, [280,280], dir+"crop.jpg")
+        crop_image(data, dir + "crop.jpg")
+        data = prepare_image(dir+"crop.jpg", [28,28], dir + "latest_sample.jpg")
         
-    im.save(dir + "/latest_sample.jpg")
-    ''' The training is done and now we should try to use 
+    ''' The training is done earlier and now we should try to use 
     the model to recognise our picture. '''
     prediction = tf.argmax(y,1)
     probabilities = y
-    #print "Probabilities", probabilities.eval(feed_dict={x: data}, session=sess)
-    return prediction.eval(feed_dict={x: data}, session=sess)[0].astype(str)
+    
+    #print "Probabilities", probabilities.eval(feed_dict={x: data}, session=sess)[0].astype(float)
+    prob = probabilities.eval(feed_dict={x: data}, session=sess)[0].astype(float)
+    evaluation = prediction.eval(feed_dict={x: data}, session=sess)[0].astype(int)
+    #print "Probability " , prob[evaluation] 
+    #return prediction.eval(feed_dict={x: data}, session=sess)[0].astype(str)
+    return evaluation, prob[evaluation]
+ 
  
 @app.after_request
 def apply_allow_origin(response):
@@ -94,13 +219,19 @@ def list_env():
     response_body = '\n'.join(response_body)
     return response_body
         
+@app.route("/latest_sample.jpg")
+def send_latest():
+    return app.send_static_file("latest_sample.jpg")
+
+
 @app.route("/")
 def hello():
     
     imgurl=request.args.get('imgurl')
-    usejson=request.args.get('json')    
+    usejson=request.args.get('json')
+    crop = request.args.get('crop')    
     if (imgurl != None):
-        dir = "/tmp"
+        dir = "/tmp/"
         
         # TODO: urllib is handy but doesn't tell anything 
         # about success so currently if we get invalid URL 
@@ -110,17 +241,22 @@ def hello():
         # Of course not to mention the concurrency support
         # or more like the lack of. It's just currently
         # very convenient to save the images to file for debugging
-        urllib.urlretrieve(imgurl, dir+"/img.jpg")
+        urllib.urlretrieve(imgurl, dir+"img.jpg")
         result = "invalid"
-        result = evaluate_image(dir)
+        #prepare_image(dir)
+        if (crop != None):
+            result = evaluate_image(dir, "img.jpg", True)
+        else:
+            result = evaluate_image(dir, "img.jpg", False)        
         
         if (usejson != None):           
-            jsonMsg = {'status':'invalid', 'url': '', 'result': ''}
+            jsonMsg = {'status':'invalid', 'url': '', 'result': '', 'probability':''}
             
             if (result != "invalid"):
                 jsonMsg['status']='valid'
             jsonMsg['url']=imgurl
-            jsonMsg['result']=result;
+            jsonMsg['result']=result[0]
+            jsonMsg['probability']=result[1]
             return jsonify(jsonMsg);
         else:
             message = '''
@@ -145,7 +281,9 @@ def hello():
                 
             message = message + '''" alt="your sample image" width=280 height=280>
             <p>TensorFlow says that the number in that picture is:'''
-            message = message + result
+            message = message + str(result[0])
+            message = message + " with probability of "
+            message = message + str(result[1])
             message = message + '''</p>
             <p>Perhaps in the version 2.0 there would be a possibility for feedback the AI whether the prediction was right or not...</p>
             </section>
